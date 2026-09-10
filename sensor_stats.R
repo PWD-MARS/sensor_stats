@@ -1,0 +1,227 @@
+### Script to generate stats and visuals based on HOBO sensor inventory and testing
+
+## Library necessary packages
+library(pool)
+library(DBI)
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(scales)
+library(ggplot2)
+
+## Create database connection
+poolConn <- dbPool(
+  drv = RPostgres::Postgres(),
+  host = "PWDMARSDBS1",
+  port = 5434,
+  dbname = "mars_prod",
+  user = Sys.getenv("mars_uid"),
+  password = Sys.getenv("mars_pwd"),
+  timezone = NULL
+)
+
+## Load inventory data
+
+inventory <- dbGetQuery(poolConn, 'SELECT * FROM sensors.viw_sensor_current_status') 
+deployments <- dbGetQuery(poolConn, 'SELECT * FROM fieldwork.viw_active_deployments')
+sensor_model_lookup <- dbGetQuery(poolConn, 'SELECT * FROM sensors.tbl_sensor_model_lookup')
+sensor_status_lookup <- dbGetQuery(poolConn, 'SELECT * FROM sensors.tbl_sensor_status_lookup')
+inventory <- inventory %>%
+  left_join(deployments, by = 'sensor_uid') %>%
+  left_join(sensor_model_lookup, by = 'sensor_model_lookup_uid') %>%
+  left_join(sensor_status_lookup, by = 'sensor_status_lookup_uid') %>%
+  select(sensor_uid, date_purchased, sensor_model, sensor_status, smp_id)
+
+
+## Update inventory table to include material and calibration depth 
+sensor_model <- c('U20-001-01', 'U20-001-04', 'U20L-01', 'U20L-04')
+material <- c('Stainless Steel', 'Stainless Steel', 'Plastic', 'Plastic')
+calibration_depth <- c('30 ft', '13 ft', '30 ft', '13 ft')  
+model_info_lookup <- data.frame(sensor_model, material, calibration_depth)
+inventory <- inventory %>%
+  left_join(model_info_lookup, by = 'sensor_model')
+
+## Add column indicating whether sensor is deployed 
+inventory <- inventory %>%
+  mutate(deployed = !is.na(smp_id))
+
+## Generate inventory tables
+
+# Table 1: All non-disposed sensors, broken up by material and calibration depth
+inventory %>%
+  filter(sensor_status != 'Disposed' & sensor_uid != 915) %>%
+  group_by(material, calibration_depth) %>%
+  summarise(n=n()) %>%
+  pivot_wider(names_from = calibration_depth, values_from = n)
+
+# Table 2: All non-disposed sensors, broken up by status
+inventory %>%
+#  filter(sensor_status != 'Disposed' & sensor_serial != 999999999) %>%
+  group_by(sensor_status) %>%
+  summarise(n=n()) 
+
+## Generate test history table
+test_history <- dbGetQuery(poolConn, 'select * from sensors.tbl_sensor_tests')
+test_type_lookup <- dbGetQuery(poolConn, 'select * from sensors.tbl_sensor_test_type_lookup')
+test_status_lookup <- dbGetQuery(poolConn, 'select * from sensors.tbl_sensor_test_status_lookup')
+test_history <- test_history %>%
+  left_join(inventory, by = 'sensor_uid') %>%
+  left_join(test_type_lookup, by = 'test_type_lookup_uid') %>%
+  left_join(test_status_lookup, by = 'sensor_test_status_lookup_uid') %>%
+  select(test_date, sensor_uid, test_type, mean_error_ft, max_abs_error_ft, mean_error_psi, max_abs_error_psi,
+         date_purchased, sensor_model, material, calibration_depth, test_type, test_status)
+
+## Separate into level and baro tables
+test_history_lvl <- test_history %>%
+  filter(test_type == 'Level') %>%
+  select(-test_type, -mean_error_psi, -max_abs_error_psi)
+test_history_baro <- test_history %>%
+  filter(test_type == 'Baro') %>%
+  select(-test_type, -mean_error_ft, -max_abs_error_ft)
+
+## Generate level test stats & visuals
+
+# Calculate number of tests performed and passing rate
+num_tests_lvl <- nrow(test_history_lvl)
+num_sensors_tested_lvl <- nrow(distinct(test_history_lvl, sensor_uid))
+num_passes_lvl <- nrow(filter(test_history_lvl, test_status == 'Pass'))
+pass_percent_lvl <- percent(num_passes_lvl / num_tests_lvl)
+print(paste0(num_tests_lvl, ' level tests performed on ', num_sensors_tested_lvl, 
+             ' unique sensors with a passing rate of ', pass_percent_lvl))
+
+
+## Flag outliers (can adjust thresholds as needed)
+outlier_mag_lvl_mean <- 0.5 
+outlier_mag_lvl_max <- 1 
+test_history_lvl <- test_history_lvl %>%
+  mutate(outlier_mean = (abs(mean_error_ft) > outlier_mag_lvl_mean),
+         outlier_max = (max_abs_error_ft > outlier_mag_lvl_max))
+
+## Make box plots of mean error
+
+# Make box plots separated by material
+mean_error_by_material_lvl <- ggplot(test_history_lvl, aes(x = material, y = mean_error_ft)) + 
+  geom_boxplot() + 
+  #geom_jitter(color='purple', size=1, width = 0.05) + 
+  labs(title = 'Mean Error by Sensor Material') +
+  ylab('Mean Error (ft)') +
+  theme(axis.title.x = element_blank()) + 
+  ylim(-outlier_mag_lvl_mean, outlier_mag_lvl_mean)
+ggsave('output/mean_error_by_material_lvl.png', mean_error_by_material_lvl)
+
+# Make box plots separated by calibration depth
+mean_error_by_cal_depth_lvl <- ggplot(test_history_lvl, aes(x = calibration_depth, y = mean_error_ft)) + 
+  geom_boxplot() + 
+  #geom_jitter(color='purple', size=1, width = 0.05) + 
+  labs(title = 'Mean Error by Calibration Depth') +
+  ylab('Mean Error (ft)') +
+  theme(axis.title.x = element_blank()) + 
+  ylim(-outlier_mag_lvl_mean, outlier_mag_lvl_mean)
+ggsave('output/mean_error_by_cal_depth_lvl.png', mean_error_by_cal_depth_lvl)
+
+# Print outlier info
+outliers_lvl_mean <- filter(test_history_lvl, outlier_mean == TRUE)$mean_error_ft %>% sort
+print(paste0('Excluded ', length(outliers_lvl_mean), ' outliers. Outlier values:'))
+cat(outliers_lvl_mean, sep = '\n')
+
+## Make box plots of max absolute error
+
+# Make box plots separated by material
+max_error_by_material_lvl <- ggplot(test_history_lvl, aes(x = material, y = max_abs_error_ft)) + 
+  geom_boxplot() + 
+  #geom_jitter(color='purple', size=1, width = 0.05) + 
+  labs(title = 'Level Tests: Max Absolute Error by Sensor Material') +
+  ylab('Max Absolute Error (ft)') +
+  theme(axis.title.x = element_blank()) + 
+  ylim(0, outlier_mag_lvl_max)
+ggsave('output/max_error_by_material_lvl.png', max_error_by_material_lvl)
+
+# Make box plots separated by calibration depth
+max_error_by_cal_depth_lvl <- ggplot(test_history_lvl, aes(x = calibration_depth, y = max_abs_error_ft)) + 
+  geom_boxplot() + 
+  #geom_jitter(color='purple', size=1, width = 0.05) + 
+  labs(title = 'Level Tests: Max Absolute Error by Calibration Depth') +
+  ylab('Max Absolute Error (ft)') +
+  theme(axis.title.x = element_blank()) + 
+  ylim(0, outlier_mag_lvl_max)
+ggsave('output/max_error_by_cal_depth_lvl.png', max_error_by_cal_depth_lvl)
+
+# Print outlier info
+outliers_lvl_max <- filter(test_history_lvl, outlier_max == TRUE)$max_abs_error_ft %>% sort
+print(paste0('Excluded ', length(outliers_lvl_max), ' outliers. Outlier values:'))
+cat(outliers_lvl_max, sep = '\n')
+
+
+
+## Generate baro test stats & visuals
+
+# Calculate number of tests performed and passing rate
+num_tests_baro <- nrow(test_history_baro)
+num_sensors_tested_baro <- nrow(distinct(test_history_baro, sensor_uid))
+num_passes_baro <- nrow(filter(test_history_baro, test_status == 'Pass'))
+pass_percent_baro <- percent(num_passes_baro / num_tests_baro)
+print(paste0(num_tests_baro, ' baro tests performed on ', num_sensors_tested_baro, 
+             ' unique sensors with a passing rate of ', pass_percent_baro))
+
+
+## Flag outliers (can adjust thresholds as needed)
+outlier_mag_baro_mean <- 0.25 
+outlier_mag_baro_max <- 0.25 
+test_history_baro <- test_history_baro %>%
+  mutate(outlier_mean = (abs(mean_error_psi) > outlier_mag_baro_mean),
+         outlier_max = (max_abs_error_psi > outlier_mag_baro_max))
+
+## Make box plots of mean error
+
+# Make box plots separated by material
+mean_error_by_material_baro <- ggplot(test_history_baro, aes(x = material, y = mean_error_psi)) + 
+  geom_boxplot() + 
+  #geom_jitter(color='purple', size=1, width = 0.05) + 
+  labs(title = 'Baro Tests: Mean Error by Sensor Material') +
+  ylab('Mean Error (psi)') +
+  theme(axis.title.x = element_blank()) + 
+  ylim(-outlier_mag_baro_mean, outlier_mag_baro_mean)
+ggsave('output/mean_error_by_material_baro.png', mean_error_by_material_baro)
+
+# Make box plots separated by calibration depth
+mean_error_by_cal_depth_baro <- ggplot(test_history_baro, aes(x = calibration_depth, y = mean_error_psi)) + 
+  geom_boxplot() + 
+  #geom_jitter(color='purple', size=1, width = 0.05) + 
+  labs(title = 'Baro Tests: Mean Error by Calibration Depth') +
+  ylab('Mean Error (psi)') +
+  theme(axis.title.x = element_blank()) + 
+  ylim(-outlier_mag_baro_mean, outlier_mag_baro_mean)
+ggsave('output/mean_error_by_cal_depth_baro.png', mean_error_by_cal_depth_baro)
+
+# Print outlier info
+outliers_baro_mean <- filter(test_history_baro, outlier_mean == TRUE)$mean_error_ft %>% sort
+print(paste0('Excluded ', length(outliers_baro_mean), ' outliers. Outlier values:'))
+cat(outliers_baro_mean, sep = '\n')
+
+## Make box plots of max absolute error
+
+# Make box plots separated by material
+max_error_by_material_baro <- ggplot(test_history_baro, aes(x = material, y = max_abs_error_psi)) + 
+  geom_boxplot() + 
+  #geom_jitter(color='purple', size=1, width = 0.05) + 
+  labs(title = 'Baro Tests: Max Absolute Error by Sensor Material') +
+  ylab('Max Absolute Error (psi)') +
+  theme(axis.title.x = element_blank()) + 
+  ylim(0, outlier_mag_baro_max)
+ggsave('output/max_error_by_material_baro.png', max_error_by_material_baro)
+
+# Make box plots separated by calibration depth
+max_error_by_cal_depth_baro <- ggplot(test_history_baro, aes(x = calibration_depth, y = max_abs_error_psi)) + 
+  geom_boxplot() + 
+  #geom_jitter(color='purple', size=1, width = 0.05) + 
+  labs(title = 'Baro Tests: Max Absolute Error by Calibration Depth') +
+  ylab('Max Absolute Error (psi)') +
+  theme(axis.title.x = element_blank()) + 
+  ylim(0, outlier_mag_baro_max)
+ggsave('output/max_error_by_cal_depth_baro.png', max_error_by_cal_depth_baro)
+
+# Print outlier info
+outliers_baro_max <- filter(test_history_baro, outlier_max == TRUE)$max_abs_error_ft %>% sort
+print(paste0('Excluded ', length(outliers_baro_max), ' outliers. Outlier values:'))
+cat(outliers_baro_max, sep = '\n')
+
