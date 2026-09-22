@@ -23,7 +23,8 @@ poolConn <- dbPool(
 ## Load inventory data
 
 inventory <- dbGetQuery(poolConn, 'SELECT * FROM sensors.viw_sensor_current_status') 
-deployments <- dbGetQuery(poolConn, 'SELECT * FROM fieldwork.viw_active_deployments')
+active_deployments <- dbGetQuery(poolConn, 'SELECT * FROM fieldwork.viw_active_deployments')
+all_deployments <- dbGetQuery(poolConn, 'SELECT * FROM fieldwork.viw_deployment_full')
 sensor_model_lookup <- dbGetQuery(poolConn, 'SELECT * FROM sensors.tbl_sensor_model_lookup')
 sensor_status_lookup <- dbGetQuery(poolConn, 'SELECT * FROM sensors.tbl_sensor_status_lookup')
 inventory <- inventory %>%
@@ -31,7 +32,6 @@ inventory <- inventory %>%
   left_join(sensor_model_lookup, by = 'sensor_model_lookup_uid') %>%
   left_join(sensor_status_lookup, by = 'sensor_status_lookup_uid') %>%
   select(sensor_uid, date_purchased, sensor_model, sensor_status, smp_id)
-
 
 ## Update inventory table to include material and calibration depth 
 sensor_model <- c('U20-001-01', 'U20-001-04', 'U20L-01', 'U20L-04')
@@ -41,22 +41,51 @@ model_info_lookup <- data.frame(sensor_model, material, calibration_depth)
 inventory <- inventory %>%
   left_join(model_info_lookup, by = 'sensor_model')
 
-## Add column indicating whether sensor is deployed 
+## Clean up inventory table
 inventory <- inventory %>%
-  mutate(deployed = !is.na(smp_id))
+  # Remove non-existent sensor from inventory
+  filter(sensor_uid != 915) %>%
+  # Add column indicating whether or not a sensor is deployed
+  mutate(deployed = !is.na(smp_id)) 
 
-## Generate inventory tables
+## Generate historical stats on sensors and deployments
+
+# Print total sensors purchased
+print(paste0('Total sensors purchased by MARS: ', nrow(inventory)))
+
+# Print total number of deployments
+# For these purposes, a "deployment" is a unique combination of sensor and location
+print(paste0('Total number of deployments: ', nrow(distinct(all_deployments, ow_uid, sensor_serial))))
+
+# Print number of deployment locations
+print(paste0('Number of unique deployment locations: ', length(unique(all_deployments$ow_uid))))
+
+# Print number of SMPs
+# Note this doesn't count non-SMP locations
+print(paste0('Number of unique deployment locations: ', length(unique(all_deployments$smp_id))))
+
+## Generate current inventory tables
 
 # Table 1: All non-disposed sensors, broken up by material and calibration depth
 inventory %>%
-  filter(sensor_status != 'Disposed' & sensor_uid != 915) %>%
+  # Remove disposed sensors
+  filter(sensor_status != 'Disposed') %>%
+  # Group by material and calibration depth and display counts in 2-way table
   group_by(material, calibration_depth) %>%
   summarise(n=n()) %>%
   pivot_wider(names_from = calibration_depth, values_from = n)
 
 # Table 2: All non-disposed sensors, broken up by status
 inventory %>%
-#  filter(sensor_status != 'Disposed' & sensor_serial != 999999999) %>%
+  # Remove disposed sensors
+  filter(sensor_status != 'Disposed') %>%
+  # Combine Good Order MARS & Good Order AKRF statuses
+  mutate(sensor_status = case_when(
+    ((sensor_status == 'Good Order- AKRF Custody' | sensor_status == 'Good Order- MARS Custody') & deployed == FALSE) ~ 'Good Order, Not Deployed',
+    ((sensor_status == 'Good Order- AKRF Custody' | sensor_status == 'Good Order- MARS Custody') & deployed == TRUE) ~ 'Good Order, Deployed',
+    TRUE ~ sensor_status
+  )) %>%
+  # Group by status and display counts
   group_by(sensor_status) %>%
   summarise(n=n()) 
 
