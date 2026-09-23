@@ -20,6 +20,11 @@ poolConn <- dbPool(
   timezone = NULL
 )
 
+
+## Set aspect ratio and height for plots
+aspect_ratio <- 1.5
+plot_height_in <- 6
+
 ## Load inventory data
 
 inventory <- dbGetQuery(poolConn, 'SELECT * FROM sensors.viw_sensor_current_status') 
@@ -28,7 +33,7 @@ all_deployments <- dbGetQuery(poolConn, 'SELECT * FROM fieldwork.viw_deployment_
 sensor_model_lookup <- dbGetQuery(poolConn, 'SELECT * FROM sensors.tbl_sensor_model_lookup')
 sensor_status_lookup <- dbGetQuery(poolConn, 'SELECT * FROM sensors.tbl_sensor_status_lookup')
 inventory <- inventory %>%
-  left_join(deployments, by = 'sensor_uid') %>%
+  left_join(active_deployments, by = 'sensor_uid') %>%
   left_join(sensor_model_lookup, by = 'sensor_model_lookup_uid') %>%
   left_join(sensor_status_lookup, by = 'sensor_status_lookup_uid') %>%
   select(sensor_uid, date_purchased, sensor_model, sensor_status, smp_id)
@@ -131,22 +136,20 @@ test_history_lvl <- test_history_lvl %>%
 # Make box plots separated by material
 mean_error_by_material_lvl <- ggplot(test_history_lvl, aes(x = material, y = mean_error_ft)) + 
   geom_boxplot() + 
-  #geom_jitter(color='purple', size=1, width = 0.05) + 
-  labs(title = 'Mean Error by Sensor Material') +
-  ylab('Mean Error (ft)') +
-  theme(axis.title.x = element_blank()) + 
+  labs(title = 'Level Tests', subtitle = 'Mean Error by Sensor Material', y = 'Mean Error (ft)') +
+  theme(axis.title.x = element_blank(), aspect.ratio = aspect_ratio) + 
   ylim(-outlier_mag_lvl_mean, outlier_mag_lvl_mean)
-ggsave('output/mean_error_by_material_lvl.png', mean_error_by_material_lvl)
+ggsave('output/mean_error_by_material_lvl.png', mean_error_by_material_lvl, 
+       height = plot_height_in, width = plot_height_in/aspect_ratio)
 
 # Make box plots separated by calibration depth
 mean_error_by_cal_depth_lvl <- ggplot(test_history_lvl, aes(x = calibration_depth, y = mean_error_ft)) + 
   geom_boxplot() + 
-  #geom_jitter(color='purple', size=1, width = 0.05) + 
-  labs(title = 'Mean Error by Calibration Depth') +
-  ylab('Mean Error (ft)') +
-  theme(axis.title.x = element_blank()) + 
+  labs(title = 'Level Tests', subtitle = 'Mean Error by Calibration Depth', y = 'Mean Error (ft)') +
+  theme(axis.title.x = element_blank(), aspect.ratio = aspect_ratio) +
   ylim(-outlier_mag_lvl_mean, outlier_mag_lvl_mean)
-ggsave('output/mean_error_by_cal_depth_lvl.png', mean_error_by_cal_depth_lvl)
+ggsave('output/mean_error_by_cal_depth_lvl.png', mean_error_by_cal_depth_lvl,
+       height = plot_height_in, width = plot_height_in/aspect_ratio)
 
 # Print outlier info
 outliers_lvl_mean <- filter(test_history_lvl, outlier_mean == TRUE)$mean_error_ft %>% sort
@@ -158,22 +161,20 @@ cat(outliers_lvl_mean, sep = '\n')
 # Make box plots separated by material
 max_error_by_material_lvl <- ggplot(test_history_lvl, aes(x = material, y = max_abs_error_ft)) + 
   geom_boxplot() + 
-  #geom_jitter(color='purple', size=1, width = 0.05) + 
-  labs(title = 'Level Tests: Max Absolute Error by Sensor Material') +
-  ylab('Max Absolute Error (ft)') +
-  theme(axis.title.x = element_blank()) + 
+  labs(title = 'Level Tests', subtitle = 'Max Absolute Error by Sensor Material', y = 'Max Absolute Error (ft)') +
+  theme(axis.title.x = element_blank(), aspect.ratio = aspect_ratio) +
   ylim(0, outlier_mag_lvl_max)
-ggsave('output/max_error_by_material_lvl.png', max_error_by_material_lvl)
+ggsave('output/max_error_by_material_lvl.png', max_error_by_material_lvl,
+       height = plot_height_in, width = plot_height_in/aspect_ratio)
 
 # Make box plots separated by calibration depth
 max_error_by_cal_depth_lvl <- ggplot(test_history_lvl, aes(x = calibration_depth, y = max_abs_error_ft)) + 
   geom_boxplot() + 
-  #geom_jitter(color='purple', size=1, width = 0.05) + 
-  labs(title = 'Level Tests: Max Absolute Error by Calibration Depth') +
-  ylab('Max Absolute Error (ft)') +
-  theme(axis.title.x = element_blank()) + 
+  labs(title = 'Level Tests', subtitle = 'Max Absolute Error by Calibration Depth', y = 'Max Absolute Error (ft)') +
+  theme(axis.title.x = element_blank(), aspect.ratio = aspect_ratio) + 
   ylim(0, outlier_mag_lvl_max)
-ggsave('output/max_error_by_cal_depth_lvl.png', max_error_by_cal_depth_lvl)
+ggsave('output/max_error_by_cal_depth_lvl.png', max_error_by_cal_depth_lvl,
+       height = plot_height_in, width = plot_height_in/aspect_ratio)
 
 # Print outlier info
 outliers_lvl_max <- filter(test_history_lvl, outlier_max == TRUE)$max_abs_error_ft %>% sort
@@ -194,7 +195,7 @@ print(paste0(num_tests_baro, ' baro tests performed on ', num_sensors_tested_bar
 
 
 ## Flag outliers (can adjust thresholds as needed)
-outlier_mag_baro_mean <- 0.25 
+outlier_mag_baro_mean <- 0.2 
 outlier_mag_baro_max <- 0.25 
 test_history_baro <- test_history_baro %>%
   mutate(outlier_mean = (abs(mean_error_psi) > outlier_mag_baro_mean),
@@ -205,22 +206,20 @@ test_history_baro <- test_history_baro %>%
 # Make box plots separated by material
 mean_error_by_material_baro <- ggplot(test_history_baro, aes(x = material, y = mean_error_psi)) + 
   geom_boxplot() + 
-  #geom_jitter(color='purple', size=1, width = 0.05) + 
-  labs(title = 'Baro Tests: Mean Error by Sensor Material') +
-  ylab('Mean Error (psi)') +
-  theme(axis.title.x = element_blank()) + 
+  labs(title = 'Baro Tests', subtitle = 'Mean Error by Sensor Material', y = 'Mean Error (psi)') +
+  theme(axis.title.x = element_blank(), aspect.ratio = aspect_ratio) + 
   ylim(-outlier_mag_baro_mean, outlier_mag_baro_mean)
-ggsave('output/mean_error_by_material_baro.png', mean_error_by_material_baro)
+ggsave('output/mean_error_by_material_baro.png', mean_error_by_material_baro,
+       height = plot_height_in, width = plot_height_in/aspect_ratio)
 
 # Make box plots separated by calibration depth
 mean_error_by_cal_depth_baro <- ggplot(test_history_baro, aes(x = calibration_depth, y = mean_error_psi)) + 
   geom_boxplot() + 
-  #geom_jitter(color='purple', size=1, width = 0.05) + 
-  labs(title = 'Baro Tests: Mean Error by Calibration Depth') +
-  ylab('Mean Error (psi)') +
-  theme(axis.title.x = element_blank()) + 
+  labs(title = 'Baro Tests', subtitle = 'Mean Error by Calibration Depth', y = 'Mean Error (psi)') +
+  theme(axis.title.x = element_blank(), aspect.ratio = aspect_ratio) + 
   ylim(-outlier_mag_baro_mean, outlier_mag_baro_mean)
-ggsave('output/mean_error_by_cal_depth_baro.png', mean_error_by_cal_depth_baro)
+ggsave('output/mean_error_by_cal_depth_baro.png', mean_error_by_cal_depth_baro,
+       height = plot_height_in, width = plot_height_in/aspect_ratio)
 
 # Print outlier info
 outliers_baro_mean <- filter(test_history_baro, outlier_mean == TRUE)$mean_error_ft %>% sort
@@ -232,22 +231,20 @@ cat(outliers_baro_mean, sep = '\n')
 # Make box plots separated by material
 max_error_by_material_baro <- ggplot(test_history_baro, aes(x = material, y = max_abs_error_psi)) + 
   geom_boxplot() + 
-  #geom_jitter(color='purple', size=1, width = 0.05) + 
-  labs(title = 'Baro Tests: Max Absolute Error by Sensor Material') +
-  ylab('Max Absolute Error (psi)') +
-  theme(axis.title.x = element_blank()) + 
+  labs(title = 'Baro Tests', subtitle = 'Max Absolute Error by Sensor Material', y = 'Max Absolute Error (psi)') +
+  theme(axis.title.x = element_blank(), aspect.ratio = aspect_ratio) + 
   ylim(0, outlier_mag_baro_max)
-ggsave('output/max_error_by_material_baro.png', max_error_by_material_baro)
+ggsave('output/max_error_by_material_baro.png', max_error_by_material_baro,
+       height = plot_height_in, width = plot_height_in/aspect_ratio)
 
 # Make box plots separated by calibration depth
 max_error_by_cal_depth_baro <- ggplot(test_history_baro, aes(x = calibration_depth, y = max_abs_error_psi)) + 
   geom_boxplot() + 
-  #geom_jitter(color='purple', size=1, width = 0.05) + 
-  labs(title = 'Baro Tests: Max Absolute Error by Calibration Depth') +
-  ylab('Max Absolute Error (psi)') +
-  theme(axis.title.x = element_blank()) + 
+  labs(title = 'Baro Tests', subtitle = 'Max Absolute Error by Calibration Depth', y = 'Max Absolute Error (psi)') +
+  theme(axis.title.x = element_blank(), aspect.ratio = aspect_ratio) + 
   ylim(0, outlier_mag_baro_max)
-ggsave('output/max_error_by_cal_depth_baro.png', max_error_by_cal_depth_baro)
+ggsave('output/max_error_by_cal_depth_baro.png', max_error_by_cal_depth_baro,
+       height = plot_height_in, width = plot_height_in/aspect_ratio)
 
 # Print outlier info
 outliers_baro_max <- filter(test_history_baro, outlier_max == TRUE)$max_abs_error_ft %>% sort
